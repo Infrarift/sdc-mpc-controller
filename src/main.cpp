@@ -172,19 +172,19 @@ int main() {
           msgJson["throttle"] = throttle_value;
 
           //Display the MPC predicted trajectory 
-          vector<double> mpc_x_vals;
+         /* vector<double> mpc_x_vals;
           vector<double> mpc_y_vals;
 
 		  for (size_t i = 2; i < actuator_output.size(); ++i) {
 			  if (i % 2 == 0) mpc_x_vals.push_back(actuator_output[i]);
 			  else            mpc_y_vals.push_back(actuator_output[i]);
-		  }
+		  }*/
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Green line
 
-          msgJson["mpc_x"] = mpc_x_vals;
-          msgJson["mpc_y"] = mpc_y_vals;
+          msgJson["mpc_x"] = mpc.ai_waypoints_x_;
+          msgJson["mpc_y"] = mpc.ai_waypoints_y_;
 
           //Display the waypoints/reference line
 		 /* vector<double> next_x_vals(local_wp_x.data(), local_wp_x.data() + local_wp_x.rows() * local_wp_x.cols());
