@@ -10,7 +10,7 @@ class Solver
 	typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
 
 	MPC_Settings settings_;
-	std::vector<SolverModel*> _solverModels;
+	std::vector<SolverModel*> solverModels_;
 	X_Model x_model_;
 	Y_Model y_model_;
 	PSI_Model psi_model_;

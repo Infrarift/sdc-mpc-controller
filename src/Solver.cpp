@@ -15,14 +15,14 @@ Solver::Solver(MPC_Settings settings)
 
 void Solver::CreateAndAddNewState(SolverModel& model, int N)
 {
-	auto newIndex = N == 0 ? 0 : (*_solverModels.back()).state_index + N;
+	auto newIndex = N == 0 ? 0 : (*solverModels_.back()).state_index_ + N;
 	model.settings_ = settings_;
-	model.state_index = newIndex;
-	_solverModels.push_back(&model);
+	model.state_index_ = newIndex;
+	solverModels_.push_back(&model);
 }
 
 void Solver::Solve(ADvector& fg, State& prev_state, State& next_state, Eigen::VectorXd coeffs, int index_offset, double dt)
 {
-	for (auto i = 0; i < _solverModels.size(); i++)
-		fg[_solverModels[i]->state_index + index_offset] = _solverModels[i]->Solve(prev_state, next_state, coeffs, dt);
+	for (auto i = 0; i < solverModels_.size(); i++)
+		fg[solverModels_[i]->state_index_ + index_offset] = solverModels_[i]->Solve(prev_state, next_state, coeffs, dt);
 }

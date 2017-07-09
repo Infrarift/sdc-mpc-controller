@@ -5,6 +5,18 @@
 
 using CppAD::AD;
 
+struct BasicState
+{
+	double x;
+	double y;
+	double psi;
+	double v;
+	double cte;
+	double epsi;
+	double delta;
+	double a;
+};
+
 class State
 {
 

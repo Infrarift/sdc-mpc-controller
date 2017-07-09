@@ -3,6 +3,7 @@
 #include "State.h"
 #include "Solver.h"
 #include "CostModule.h"
+#include "Eigen-3.3/Eigen/QR"
 
 using CppAD::AD;
 
@@ -33,13 +34,13 @@ public:
 
 		// Set the initial state.
 		previous_state.SetValues(vars, 0);
-		for (auto i = 0, m = 5; i < m; i++)
+		for (size_t i = 0, m = 5; i < m; i++)
 		{
 			auto state = *previous_state.states_[i];
 			fg[state.start_index_ + 1] = state.val_;
 		}
 
-		for (auto t = 0; t < settings_.N; ++t)
+		for (size_t t = 0; t < settings_.N; ++t)
 		{
 			previous_state.SetValues(vars, t);
 			next_state.SetValues(vars, t + 1);
@@ -49,7 +50,7 @@ public:
 				solver.Solve(fg, previous_state, next_state, coeffs, t + 2, settings_.dt);
 
 			// Solve cost for each step.
-			for (int i = 0, m = cost_modules_->size(); i < m; i++)
+			for (size_t i = 0, m = cost_modules_->size(); i < m; i++)
 			{
 				if ((*cost_modules_)[i]->max_index_ > t)
 					fg[0] += (*cost_modules_)[i]->GetCost(previous_state, next_state);
@@ -58,66 +59,56 @@ public:
 	}
 };
 
-MPC::MPC()
+MPC::MPC(MPC_Settings settings)
 {
-	settings_.N = 8;
-	settings_.dt = 0.15;
-	settings_.Lf = 2.67;
-	settings_.tar_v = 50;
+	settings_ = settings;
 
-	settings_.cte_cost_w = 200;
-	settings_.v_cost_w = 1;
-	settings_.epsi_cost_w = 15000;
-	settings_.steer_cost_w = 100000;
-	settings_.steer_delta_cost_w = 100000;
-
-	AddCost(&cte_cost, settings_.cte_cost_w, settings_.N);
-	AddCost(&v_cost, settings_.v_cost_w, settings_.N);
-	AddCost(&epsi_cost, settings_.epsi_cost_w, settings_.N);
-	AddCost(&steer_cost, settings_.steer_cost_w, settings_.N - 1);
-	AddCost(&steer_delta_cost, settings_.steer_delta_cost_w, settings_.N - 2);
+	AddCost(&cte_cost_, settings_.cte_cost_w, settings_.N);
+	AddCost(&v_cost_, settings_.v_cost_w, settings_.N);
+	AddCost(&epsi_cost_, settings_.epsi_cost_w, settings_.N);
+	AddCost(&steer_cost_, settings_.steer_cost_w, settings_.N - 1);
+	AddCost(&steer_delta_cost_, settings_.steer_delta_cost_w, settings_.N - 2);
 
 	state_.Initialize(settings_.N);
+
+	n_states_ = 6;
+	n_actuators_ = 2;
+	n_vars_ = n_states_ * settings_.N + n_actuators_ * (settings_.N - 1);
+	n_constraints_ = n_states_ * settings_.N;
 }
 
 MPC::~MPC()
 {
 }
 
-vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs)
+vector<double> MPC::Solve(BasicState state, vector<double> pts_x, vector<double> pts_y)
 {
-	bool ok = true;
-	int n_state = 6;
-	int n_actuators = 2;
+	// Transform Co-ordinates to local space.
+	Eigen::VectorXd local_wp_x(pts_x.size());
+	Eigen::VectorXd local_wp_y(pts_y.size());
+	CreateWayPoints(local_wp_x, local_wp_y, pts_x, pts_y, state.x, state.y, state.psi);
 
-	size_t n_vars = n_state * settings_.N + n_actuators * (settings_.N - 1);
-	size_t n_constraints = n_state * settings_.N;
+	// Create the co-efficients.
+	auto coeffs = PolyFit(local_wp_x, local_wp_y, 3);
 
 	// Create variable and constraint vectors.
-	auto vars = CreateVector(n_vars, 0);
-	auto vars_lowerbound = CreateVector(n_vars, -numeric_limits<float>::max());
-	auto vars_upperbound = CreateVector(n_vars, numeric_limits<float>::max());
-	auto constraints_lowerbound = CreateVector(n_constraints, 0);
-	auto constraints_upperbound = CreateVector(n_constraints, 0);
+	auto vars					= CreateVector(n_vars_, 0);
+	auto vars_lowerbound		= CreateVector(n_vars_, -numeric_limits<float>::max());
+	auto vars_upperbound		= CreateVector(n_vars_, numeric_limits<float>::max());
+	auto constraints_lowerbound = CreateVector(n_constraints_, 0);
+	auto constraints_upperbound = CreateVector(n_constraints_, 0);
 
 	// Set variable limits.
 	FillVector(vars_lowerbound, state_.delta_.start_index_, state_.a_.start_index_, -0.436);
 	FillVector(vars_upperbound, state_.delta_.start_index_, state_.a_.start_index_, 0.436);
-	FillVector(vars_lowerbound, state_.a_.start_index_, n_vars, -1.0);
-	FillVector(vars_upperbound, state_.a_.start_index_, n_vars, 1.0);
+	FillVector(vars_lowerbound, state_.a_.start_index_, n_vars_, -1.0);
+	FillVector(vars_upperbound, state_.a_.start_index_, n_vars_, 1.0);
 
-	// TODO: Extract this to initialize the first contraints better.
-	for (size_t i = 0, m = state.size(); i < m; i++)
-	{
-		auto j = i * settings_.N;
-		constraints_lowerbound[j] = state[i];
-		constraints_upperbound[j] = state[i];
-		vars[j] = state[i];
-	}
+	// Add the initial state constraints.
+	AddInitialStateConstraints(state, coeffs, vars, constraints_lowerbound, constraints_upperbound);
 
 	// Create solver object.
 	FG_eval fg_eval(coeffs, &cost_modules_, settings_);
-
 	std::string options;
 	options += "Integer print_level  0\n";
 	options += "Sparse  true        forward\n";
@@ -133,6 +124,7 @@ vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs)
 		constraints_upperbound, fg_eval, solution);
 
 	// Check Solution Values.
+	auto ok = true;
 	ok &= solution.status == CppAD::ipopt::solve_result<Dvector>::success;
 
 	// Total Cost.
@@ -140,7 +132,7 @@ vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs)
 	std::cout << "Cost " << cost << std::endl;
 
 	// Return MPC Waypoints.
-	ExtractWaypoints(solution);
+	ExtractWaypoints(solution, coeffs);
 
 	// Create a vector to return the actuator values.
 	vector<double> result;
@@ -167,17 +159,99 @@ MPC::Dvector MPC::CreateVector(int dimensions, double default_value)
 
 void MPC::FillVector(Dvector& vector, int start_index, int end_index, double value)
 {
-	for (size_t i = start_index; i < end_index; ++i)
+	for (size_t i = start_index, m = end_index; i < m; ++i)
 		vector[i] = value;
 }
 
-void MPC::ExtractWaypoints(CppAD::ipopt::solve_result<Dvector> solution)
+
+void MPC::AddInitialStateConstraints(BasicState& state, Eigen::VectorXd coeffs, Dvector& vars1, Dvector& vars2, Dvector& vars3)
+{
+	state.cte = PolyEval(coeffs, 0);
+	state.epsi = -atan(coeffs[1]);
+
+	auto dt		= 0.1;
+	auto p_x	= 0.0 + state.v * dt;
+	auto p_y_	= 0.0;
+	auto p_psi	= 0.0 + state.v * -state.delta / settings_.Lf * dt;
+	auto p_v	= state.v + state.a * dt;
+	auto p_cte	= state.cte + state.v * sin(state.epsi) * dt;
+	auto p_epsi = state.epsi + state.v * -state.delta / settings_.Lf * dt;
+
+	Eigen::VectorXd state_vector(6);
+	state_vector << p_x , p_y_ , p_psi , p_v , p_cte , p_epsi;
+
+	for (size_t i = 0, m = state_vector.size(); i < m; i++)
+	{
+		auto j = i * settings_.N;
+		vars1[j] = state_vector[i];
+		vars2[j] = state_vector[i];
+		vars3[j] = state_vector[i];
+	}
+}
+
+
+void MPC::ExtractWaypoints(CppAD::ipopt::solve_result<Dvector> solution, Eigen::VectorXd poly)
 {
 	ai_waypoints_x_.clear();
 	ai_waypoints_y_.clear();
+
+	map_waypoints_x_.clear();
+	map_waypoints_y_.clear();
+
 	for (size_t i = 0; i < settings_.N; ++i)
 	{
 		ai_waypoints_x_.push_back(solution.x[state_.x_.start_index_ + i]);
 		ai_waypoints_y_.push_back(solution.x[state_.y_.start_index_ + i]);
+	}
+
+	for (size_t i = 1; i < 30; ++i)
+	{
+		auto n_x = 3 * i;
+		auto n_y = PolyEval(poly, n_x);
+		map_waypoints_x_.push_back(n_x);
+		map_waypoints_y_.push_back(n_y);
+	}
+}
+
+double MPC::PolyEval(Eigen::VectorXd coeffs, double x) const
+{
+	auto result = 0.0;
+	for (size_t i = 0, m = coeffs.size(); i < m; i++)
+		result += coeffs[i] * pow(x, i);
+	return result;
+}
+
+Eigen::VectorXd MPC::PolyFit(Eigen::VectorXd xvals, Eigen::VectorXd yvals, int order)
+{
+	assert(xvals.size() == yvals.size());
+	assert(order >= 1 && order <= xvals.size() - 1);
+	Eigen::MatrixXd A(xvals.size(), order + 1);
+
+	for (size_t i = 0, m = xvals.size(); i < m; i++)
+		A(i, 0) = 1.0;
+
+	for (size_t j = 0, m = xvals.size(); j < m; j++)
+	{
+		for (auto i = 0; i < order; i++)
+			A(j, i + 1) = A(j, i) * xvals(j);
+	}
+
+	auto Q = A.householderQr();
+	auto result = Q.solve(yvals);
+	return result;
+}
+
+void MPC::CreateWayPoints(Eigen::VectorXd& x_wp, Eigen::VectorXd& y_wp, const vector<double>& x_mp, const vector<double>& y_mp, double x, double y, double psi) const
+{
+	auto cos_theta = cos(-psi);
+	auto sin_theta = sin(-psi);
+
+	for (size_t i = 0; i < x_mp.size(); i++)
+	{
+		auto dx = x_mp[i] - x;
+		auto dy = y_mp[i] - y;
+
+		x_wp(i) = dx * cos_theta - dy * sin_theta;
+		y_wp(i) = dx * sin_theta + dy * cos_theta;
 	}
 }

@@ -9,7 +9,7 @@ class CostModule
 {
 public:
 	double weight_;
-	int max_index_;
+	size_t max_index_;
 	MPC_Settings settings_;
 	virtual AD<double> CalculateCost(State& prev, State& next) = 0;
 	AD<double> GetCost(State& prev, State& next);

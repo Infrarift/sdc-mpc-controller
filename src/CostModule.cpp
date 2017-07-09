@@ -20,7 +20,7 @@ AD<double> EPSI_CostModule::CalculateCost(State& prev, State& next)
 
 AD<double> V_CostModule::CalculateCost(State& prev, State& next)
 {
-	return prev.v_.val_ - settings_.tar_v;
+	return prev.v_.val_ - settings_.target_v;
 }
 
 AD<double> Steering_CostModule::CalculateCost(State& prev, State& next)

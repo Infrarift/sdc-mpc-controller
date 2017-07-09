@@ -8,7 +8,7 @@ using CppAD::AD;
 class SolverModel
 {
 public:
-	int state_index;
+	int state_index_;
 	MPC_Settings settings_;
 	virtual AD<double> Solve(State& prev_state, State& next_state, Eigen::VectorXd& coeffs, double dt) = 0;
 };
